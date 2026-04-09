@@ -2,11 +2,11 @@
 
 // TODO: add your uniqname to the HTML (use id #uniqname) file so that your work can be identified 
 d3.select('#uniqname')
-    .style('color', 'blue')
+    .style('color', 'green')
     .style('font-size', '20px')
     .text('cdhao');
 // TODO: import data using d3.csv()
-const dataFile = 
+const dataFile = await d3.csv('data/routes.csv')
 
 const colornone = "#ccc";
 
@@ -15,7 +15,7 @@ const airlineColor = { WN: "orange", B6: "steelblue" };
 const airlineName = { WN: "Southwest Airlines", B6: "JetBlue" };
 
 // create options from selector that allows us to view all airlines or filter by a specific airline
-const airlines = ["all", ...new Set(dataFile.map(d => d.Airline))];
+const airlines = ["all", ...new Set(dataFile.map(d => d.Airline))]; //would look like ["all", "B6", "WN"]
 
 // build selector from data
 const select = d3.select("body")
@@ -26,7 +26,7 @@ select.selectAll("option")
     .data(airlines)
     .join("option")
     .attr("value", d => d)
-    .text(// TODO: build options from selector that allows us to view all airlines or filter by a specific airline);
+    .text(d => d === "all" ? "All Airlines": airlineName[d] || d)// TODO: build options from selector that allows us to view all airlines or filter by a specific airline);
 
 // helper function to build outgoing links for each leaf node
 function bilink(root) {
@@ -83,5 +83,138 @@ draw("all"); // initial draw
 // TODO: edit link to show different colors for different airlines, you can use the airlineColor object defined above for reference
 // TODO: edit overed and outed functions to highlight connected links and nodes on hover
 function createChart(data) {
+    const width = 960;
+    const radius = width / 2;
 
+    // build hierarchy + radial cluster layout
+    const tree = d3.cluster()
+        .size([2 * Math.PI, radius - 140]);
+
+    const root = tree(
+        bilink(
+            d3.hierarchy(data)
+                .sort((a, b) =>
+                    d3.ascending(a.height, b.height) ||
+                    d3.ascending(a.data.name, b.data.name)
+                )
+        )
+    );
+
+    // build incoming links from outgoing links
+    for (const leaf of root.leaves()) {
+        leaf.incoming = [];
+    }
+    for (const leaf of root.leaves()) {
+        for (const o of leaf.outgoing) {
+            o[1].incoming.push(o);
+        }
+    }
+
+    const svg = d3.create("svg")
+        .attr("width", width)
+        .attr("height", width)
+        .attr("viewBox", [-width / 2, -width / 2, width, width])
+        .attr("style", "max-width: 100%; height: auto; font: 11px sans-serif;");
+
+    // line generator for bundled curves
+    const line = d3.lineRadial()
+        .curve(d3.curveBundle.beta(0.85))
+        .radius(d => d.y)
+        .angle(d => d.x);
+
+    // draw links first
+    const link = svg.append("g")
+        .attr("fill", "none")
+        .selectAll("path")
+        .data(root.leaves().flatMap(leaf => leaf.outgoing))
+        .join("path")
+        .attr("d", ([i, o]) => line(i.path(o)))
+        .attr("stroke", ([, , airline]) => airlineColor[airline] || colornone)
+        .attr("stroke-opacity", 0.5)
+        .attr("stroke-width", 1.2)
+        .style("mix-blend-mode", "multiply")
+        .each(function (d) {
+            d.path = this;
+        });
+
+    // draw airport labels
+    const node = svg.append("g")
+        .selectAll("g")
+        .data(root.leaves())
+        .join("g")
+        .attr("transform", d => `rotate(${d.x * 180 / Math.PI - 90}) translate(${d.y},0)`);
+
+    const label = node.append("text")
+        .attr("dy", "0.31em")
+        .attr("x", d => d.x < Math.PI ? 8 : -8)
+        .attr("text-anchor", d => d.x < Math.PI ? "start" : "end")
+        .attr("transform", d => d.x >= Math.PI ? "rotate(180)" : null)
+        .text(d => d.data.name)
+        .style("cursor", "pointer")
+        .each(function (d) {
+            d.text = this;
+        })
+        .on("mouseover", overed)
+        .on("mouseout", outed)
+        .append("title")
+        .text(d => {
+            const airport = d.data.name;
+            const region = d.parent ? d.parent.data.name : "";
+            const outgoingCount = d.outgoing.length;
+            const incomingCount = d.incoming.length;
+            return `Airport: ${airport}
+Region: ${region}
+Outgoing routes: ${outgoingCount}
+Incoming routes: ${incomingCount}`;
+        });
+
+    function overed(event, d) {
+        // reset first
+        link
+            .attr("stroke-opacity", 0.06)
+            .attr("stroke-width", 1.2);
+
+        svg.selectAll("text")
+            .attr("fill", null)
+            .attr("font-weight", null);
+
+        d3.select(d.text)
+            .attr("font-weight", "bold")
+            .attr("fill", "#111");
+
+        // highlight outgoing links + target labels
+        d3.selectAll(d.outgoing.map(x => x.path))
+            .attr("stroke", ([, , airline]) => airlineColor[airline] || "red")
+            .attr("stroke-opacity", 1)
+            .attr("stroke-width", 2.5)
+            .raise();
+
+        d3.selectAll(d.outgoing.map(([, target]) => target.text))
+            .attr("fill", "crimson")
+            .attr("font-weight", "bold");
+
+        // highlight incoming links + source labels
+        d3.selectAll(d.incoming.map(x => x.path))
+            .attr("stroke", ([, , airline]) => airlineColor[airline] || "blue")
+            .attr("stroke-opacity", 1)
+            .attr("stroke-width", 2.5)
+            .raise();
+
+        d3.selectAll(d.incoming.map(([source]) => source.text))
+            .attr("fill", "royalblue")
+            .attr("font-weight", "bold");
+    }
+
+    function outed() {
+        link
+            .attr("stroke", ([, , airline]) => airlineColor[airline] || colornone)
+            .attr("stroke-opacity", 0.5)
+            .attr("stroke-width", 1.2);
+
+        svg.selectAll("text")
+            .attr("fill", null)
+            .attr("font-weight", null);
+    }
+
+    return svg.node();
 }
